@@ -1,0 +1,38 @@
+20150073 김경만 Assign#4 readme.txt
+1. 전체적인 과정
+	1. super node 1이 실행되면 server socket을 bind한 뒤 select함수를 통해 동시에 여러 연결을 받을 준비를 한다.
+	2. super node 2가 실행되면 super node 1에게 super socket을 만들어서 connect한다. 즉 HELLO FROM SUEPR TO SUPER를 보낸다. super node 2는 자신이 만든 super socket을 select 함수에 사용되는 pool의 read set에 추가해야 한다. super socket을 통해 데이터가 들어와도 select를 통해 알아차려야 하기 때문이다. super node 1은 select로부터 알아차린 HELLO FROM SUPER TO SUPER의 socket을 나중에 사용하기 위해 super socket으로 저장해둔다.
+	3. Child 1이 실행되면 자신과 연결된 서버에게 HELLO FROM CHILD를 보낸다. 이때 자신이 다른 child에게서 연결 받을 server socket이 연결된 port를 super node에게 알려준다.
+	4. super node는 child가 보낸 port 정보와 child의 IP주소를 ID와 함께 pool에 저장한다. 즉, child의 정보는 pool에 배열 형태로 그 child와 연결된 소켓과 함께 저장된다. 여기서 ID는 서버가 child에게 부여하는 것이기 때문에 child에게 답장인 HELLO FROM SUPER를 보낼 때 Header의 ID 값을 부여한 ID로 설정한다.
+	5. 자신의 ID를 부여받은 child는 ./data 폴더에 있는 파일들의 name과 size를 packet의 payload에 실어서 super node에게 보낸다. 이때부터 child가 보내는 packet header의 ID는 부여받은 ID이다.
+	6. super node는 strtok를 이용하여 공백을 기준으로 분리하며 파일 name과 size를 파악하여 flist에 추가한다. 여기서 flist는 hash table로 각 배열의 원소는 list이다. 파일 name을 hash function을 이용하여 적절한 원소의 list의 맨 뒤 (rear)에 추가한다. 이게 super node가 file 정보를 관리하는 방법이다. list에 추가할 때는 한 file 정보가 node의 형태로 있는데 이 node는 파일 name, size, 그 파일을 가진 child의 ID, port, IP address가 포함되어 있다.
+	7. Child에게 받았던 packet의 payload, 즉 파일 정보가 들어있는 문장을 다시 child에게 FILE INFO RECV SUCCESS와 함께 보내준다. 만약 strtok를 이용해 파일 정보를 이해하는데 파일의 name이 있는데 size가 없는 등 문제가 생기면 FILE INFO RECV FAIL를 child에게 보내준다.
+	8. 처음 child에게 받았던 packet의 payload를 저장해두었다가 또 다른 super node에게 super socket을 이용하여 보내준다. 이 과정이 FILE INFO SHARE이다. 이때는 child에게 받았던 payload 앞에 이 child의 ID, port, IP address 정보까지 공백으로 분리하여 같이 보내준다. 이 메세지를 받은 super node는 child의 ID, port, address 정보와 함께 똑같이 strtok로 구분하여 파일들의 name, size를 flist에 hash function을 이용하여 저장한다. 이렇게 하면 두 super node가 같은 flist, 즉 파일 정보를 가지게 된다. hash function 역시 둘이 동일하기 때문이다.
+	9. 그 후 super node는 또 다른 super node에게 자신이 받은 payload를 처음에 저장해 두었다가 다시 FILE INFO SHARE SUCCESS와 함께 보내준다. 만약 FILE INFO RECV FAIL때와 똑같이 super node가 자신에게 준 packet의 payload가 파일 정보를 저장하기에 문제가 있다면 FILE INFO SHARE FAIL을 보내준다.
+	10. 이렇게 하면 2개의 super node가 모든 child의 파일 정보를 가지게 된다.
+	11. CHILD는 STDIN으로 입력받은 파일 이름을 payload에 실어 자신의 super node에게 super socket으로 보내준다. 이것이 SEARCH QUERY이다. 
+	12. super node는 자신의 flist에 요청하는 파일 이름을 이용해 계산한 hash 값으로 접근하여 그 원소의 list를 쭉 next로 타고 들어가며 같은 파일 이름이 있는지 확인한다. 만약 있다면 그 node의 port, address 값을 가지고 packet의 payload에 실어서 SEARCH ANS SUCCESS와 함께 보내준다. 만약 그런 이름을 가진 파일이 list에 없다면 SEARCH ANS FAIL을 보내준다.
+	13. SEARCH ANS를 받은 child는 그 port, address값을 가지고 client socket을 만들어 connect한다. 그리고 원하는 파일 name을 payload에 실어서 FILE REQ를 보낸다.
+	14, child에서 select에 의해 새로 연결된 socket에서 FILE REQ를 보냈다면 그 파일이 ./data 폴더에 있는지 확인한다. 만약 없다면 FILE REQ FAIL을 보낸다. 우선 파일을 "rb"로 열어서 fread 함수를 이용해 최대 1024byte를 읽은 뒤 그 중에 NUL 문자가 있는지 확인한다. 텍스트 파일에는 있을 수 없으므로 만약 있다면 binary 파일인 것이다. is_binary함수를 이용하여 구분한 뒤 파일이 text파일이라면 payload에 "t" 한글자를 보낸다. 만약 binary 파일이라면 payload에 "b"를 보낸다. 그 후 각각 "r" 또는 "rb"로 파일을 열어서 파일이 끝날때까지 소켓을 이용해서 client socket에 보내준다. 이때 파일의 내용을 보내줄 때의 MSG type은 FILE REQ인 0x00000040이다.
+	15. 다 보낸 뒤에는 FILE REQ SUCCESS를 보내주며 client socket을 close 해준다. 원하는 요청을 해결했기 때문이다.
+	16. FILE REQ를 보낸 child는 자신에게 온 packet의 payload가 "t" 인지 "b"인지를 확인하여 각각 파일 종류에 맞게 "w" 또는 "wb"로 ./download에 파일을 만들어 준다. 그 후 socket으로 받은 내용을 파일에 출력해준다. 입력받은 packet의 MSG type이 0x00000040이라면 파일의 내용인 것이며 MSG type이 0x00000041이 된다면 모든 파일의 내용을 전해 받은 것으로 인식하고 쓰던 파일을 닫는다.
+
+2. 디자인한 부분
+	ID: 우선 모든 super node가 child나 다른 super node에게 packet을 보낼 때는 ID 값이 0이다. 그리고 처음 실행되는 super node 1의 ID 값은 1이다. 그 후 super node 2가 실행되면서 super node 1에게 HELLO FROM SUPER TO SUPER를 보내는 순간 자신의 ID 값을 2로 바꾼다. 즉, 이때부터 처음 실행된 super node는 ID값이 1이며 그 후에 실행된 super node의 ID 값은 2인 것이다. 그 이후로는 각각 자신에게 HELLO를 보낸 child에게 HELLO FROM SUPER를 보내주면서 자신의 ID 값을 packet의 header에 넣어주고 ID 값에 2를 더해서 업데이트한다. 즉, super node 1에 연결되는 child의 ID는 순서대로 1, 3, 5, 등 홀수이며 super node 2에 연결되는 child의 ID는 2, 4, 6 등 짝수가 된다. 이렇게 되면 모든 child의 ID는 unique하게 된다. 이렇게 super node로 부터 ID를 부여받은 후부터는 child들은 packet을 만들고 보낼 때 header의 ID에 부여받은 ID를 넣는다.
+
+	Child information: 각 super node는 child로 부터 hello를 받을 때, 그 child가 packet에 실어 보내온 port 정보, 그리고 client_addr를 통해 알아낸 address정보, 마지막으로 그때 부여한 ID 정보를 pool에 저장한다. 즉, pool에 방금 연결된 socket이 pool.client_sock[i]에 저장되어 있다면 이 socket의 ID, port, address를 pool.client_sock_ID[i], pool.client_sock_port[i], pool.client_sock_addr[i]에 저장하게 됨으로써 child의 정보를 가지고 있게 된다. 이러한 child 정보를 다른 super node는 file information을 share하면서 알게 된다.
+
+	File information: 전역 변수로 flist[10]을 만들었으며 이 각각의 원소의 자료형은 (list *)이다. 즉, 배열의 원소가 총 10칸인 hash table이며 각 원소는 연결 리스트로 next로 이어져 있다.list에 연결되는 형태는 Node로 Node 구조체에는 file 이름, file 크기, file을 가지고 있는 child의 ID, port, address, 마지막으로 그 다음 node와 연결되는 next로 총 6개의 항목을 가지고 있다. 처음 child로부터 file 정보를 받게되면 hash function에게 file name을 넘겨주어 0부터 9사이의 값을 반환받는다. 그 후 flist의 그 원소에 있는 list에 접근하여 맨 끝인 rear에 이 새로운 file 정보가 저장된 node를 연결해준다. 애초에 파일 이름을 입력받았을 때 빠르게 이 파일의 소유자 정보를 알아야 하기 때문에 파일 이름으로 hash function을 만들었다. 
+
+	Hash function: 파일 이름이 예시에 숫자로 시작해서 hash function을 if (strlen(str) == 1) return str[0] % 10;  else return (str[0] * 10 + str[1]) % 10; 로 만들었다. file name의 첫 두글자를 보고 0부터 9까지의 원소를 결정하게 된다. 
+
+	File Transmission: 파일을 전송할 때에는 0x00000040인 FILE REQ를 가지고 있는 packet으로 계속 payload에 파일 내용을 실어서 전송했다. 또한 파일 내용을 모두 읽었다면 마지막으로 payload에 아무것도 실지 않고 0x00000041인 FILE REQ SUCCESS를 보내서 파일을 모두 보냈음을 확인하도록 하였다.
+	Text or Binary: 처음에 "rb"로 파일을 읽은 후 최대 1024byte를 읽어 NUL이 포함되어 있다면 binary 파일이라고 결정하게 하였다. 그렇게 결정한 후 파일이 text라면 payload에 "t"하나를, 아니라면 "b"하나를 보내서 파일을 받는 쪽이 binary인지 text인지 알도록 하였다. 그 후 "r"이나 "rb", 그리고 fgets나 fread를 사용하여 파일을 읽어 전송하였으며 파일을 받는 쪽도 binary라면 "wb", text라면 "w"로 파일을 열어서 download 폴더에 fwrite나 fprintf를 사용하여 출력하였다. 
+
+	Binary: Text의 경우 받은 packet의 payload의 길이를 strlen으로 측정하여 마지막으로 보낸 파일 내용을 길이에 맞게 저장할 수 있었다. 하지만 Binary 파일의 경우에는 packet의 payload에 중간중간 '\0'이 포함되어 있어 strlen을 사용하여 길이를 측정할 수 없었다. 하지만 받은 payload에서 어디까지가 파일 내용인지 알아야 했기 때문에 binary인 경우 packet의 header의 length부분에 (Header의 크기 + 파일 내용의 크기)를 넣어서 보내줬다. 파일을 읽는 쪽 역시 이 부분을 먼저 읽어서 원하는 만큼만 payload에서 가져와서 파일로 출력하였다. 
+
+	Child process: child의 경우 STDIN으로 입력받은 파일 이름을 super node에게 물어봐서 적절한 child에게 연결을 시도하고 다운 받을 수도 있어야 하며 다른 child에서 자신의 ./data 폴더에 있는 파일을 원할 경우 보낼 줄도 알아야 하기 때문에 2개의 process를 fork를 사용하여 만들어 주었다. fork를 부르는 시점은 super node에게 FILE INFO를 보낸 시점으로 이때부터 두 process로 나뉜다. 자식 process는 STDIN으로부터 입력받고 입력받은 파일 이름을 super node에게 SEARCH QUERY로 전송, 받은 port와 address정보를 가지고 다시 socket을 만들어서 파일을 가지고 있는 child에 연결을 시도한다. 그 후 그 child가 보내주는 파일 정보를 ./download 폴더에 새로운 파일 이름으로 저장한다. 반대로 부모 process는 select함수를 실행하며 언제라도 자신에게 연결을 요청한 socket을 받아주고 원하는 파일을 자신의 ./data 폴더에서 찾아 전송해준다. 두 프로세스가 동시에 돌아가기 때문에 원하는 파일을 다운받으면서 동시에 다른 child가 원하는 파일을 제공해줄 수 있게 된다.
+
+	close super socket: 부모 process는 select를 통해 새로 들어온 data를 항상 읽어본다. 그렇기 때문에 자식 process에서 읽어야 하는 socket의 data를 부모 process가 읽는 문제가 생기는데 바로 super socket의 경우이다. super socket은 super node와 연결된 socket으로 자식 process가 SEARCH QUERY를 보냈는데 부모 process가 SEARCH ANS SUCCESS를 읽으면 안되기 때문이다. 그래서 부모 process는 fork를 통해 나눠진 후 0x00000021에 해당하는 FILE INFO RECV SUCCESS를 super node로부터 받는 순간 super socket을 닫고 pool의 read set에서 지워버린다. 즉, 더이상 select 함수에서 super socket을 읽지 않기 때문에 자식 process만이 super node와 연결된 것이다. 이때부터 부모 process는 super node와 통신하지 않고 오로지 자신에게 온 FILE REQ만 담당하게 된다.
+
+	2 seconds: 자식 process가 STDIN으로부터 파일 이름을 입력받은 후부터 clock함수를 이용하여 시간을 측정하였다. 그 후 super node가 SEARCH QUERY ANS SUCCESS를 보내서 이 파일을 가지고 있는 child의 port와 address를 알았을 때의 시간을 clock함수로 측정하여 그 사이의 시간을 측정하였다. 만약 이 시간이 2초가 넘었다면 "WRONG! Network Transaction is handled more than 2 secs"라는 메세지를 출력하도록 하였다.

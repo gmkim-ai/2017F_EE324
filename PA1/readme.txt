@@ -1,0 +1,4 @@
+20150073 김경만
+소켓을 통해서 packet의 형태로 데이터를 운반합니다. 여기서 packet은 구조체 packet_form으로 Header 구조체와 payload char 배열로 이루어져 있습니다. Header는 과제 설명 페이지에 있는 8바이트 구조체이며 payload는 1024 byte의 크기를 가진 char형 배열입니다. 시나리오의 모든 과정에서 원하지 않는 데이터가 왔을 시에 command가 0x0005인 에러 패킷을 보내도록 했습니다.
+server: 소켓을 연결한 후 읽은 데이터를 저장할 packet 변수를 선언하고 메모리를 allocate합니다. client hello를 받은 후 제대로 왔는지 확인하고 server hello를 보냅니다. 그 후 command가 0x0003인 패킷을 while 반복문을 통해 계속 받으면서 commmand가 0x0003일때까지 반복합니다. 이때 char형 data가 1024byte씩 오기 때문에 배열이 가득찰때마다 2배씩 realloc하면서 memcpy를 이용해서 새로 온 데이터를 배열 뒷부분에 차례대로 저장합니다. 만약 command가 0x0004라면 반복문을 빠져나와 여태 저장한 char배열을 파일에 옮긴 후 종료합니다.
+client: 소켓을 연결한 후 server와 같이 보낼 데이터를 저장할 packet 변수를 선언하고 메모리를 allocate 한 뒤 각 packet의 원소에 접근하여 version이나 user_ID 등 초기 설정을 해줍니다. 그렇게 command가 0x0001인 client hello를 보낸 후 server hello가 제대로 오는지 확인합니다. 그 후 파일 포인터를 이용하여 fgets를 통해 파일 끝네 다다를때까지 packet의 payload 배열에 반복문을 통해 저장하고 server에 보냅니다. 그렇게 파일을 다 보내면 command 설정을 0x0004로 바꾼 뒤 파일 이름을 payload에 복사하여 마지막으로 데이터를 보낸 후 종료합니다.
